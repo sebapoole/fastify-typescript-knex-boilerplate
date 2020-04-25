@@ -1,0 +1,113 @@
+import { ServerResponse } from 'http';
+import { FastifyRequest, FastifyReply } from 'fastify';
+
+import { IUserService } from '../user/user.interface';
+import { IEmailService } from '../email/interface';
+import { IAuthService } from './auth.interface';
+import { IResetPasswordService } from '../resetPassword/resetpassword.interface';
+import { generateRandomBytes } from '../../utils/token.helper';
+import { NotFoundError } from '../../exceptions/notFound';
+import { UnauthorizedError } from '../../exceptions/unauthorized';
+import { InvalidError } from '../../exceptions/invalid';
+
+export default class AuthHandler {
+  constructor(
+    private readonly authService: IAuthService,
+    private readonly userService: IUserService,
+    private readonly emailService: IEmailService,
+    private readonly resetPassService: IResetPasswordService
+  ) {}
+
+  async signUp(req: FastifyRequest, res: FastifyReply<ServerResponse>): Promise<void> {
+    const newUser = await this.userService.create(req.body);
+    const token = await this.authService.issueToken(newUser);
+    res.code(200).send({
+      data: {
+        user: newUser,
+        token
+      }
+    });
+    await this.emailService.sendWelcome(newUser.email, newUser.first_name);
+  }
+
+  async login(req: FastifyRequest, res: FastifyReply<ServerResponse>): Promise<void> {
+    const user = await this.userService.getByEmailWithPassword(req.body.email);
+    if (
+      !user ||
+      !(await this.authService.checkPassword(req.body.password, user.password))
+    ) {
+      throw new InvalidError('Invalid email or password');
+    }
+    const token = await this.authService.issueToken(user);
+    const { password: _, ...rest } = user;
+    res.code(200).send({
+      data: {
+        token,
+        user: { ...rest }
+      }
+    });
+  }
+
+  async logout(req: FastifyRequest, res: FastifyReply<ServerResponse>): Promise<void> {
+    res.code(200).send({
+      data: { message: 'logged out' }
+    });
+  }
+
+  async forgotPassword(
+    req: FastifyRequest,
+    res: FastifyReply<ServerResponse>
+  ): Promise<void> {
+    const { email }: { email: string } = req.body;
+    const user = await this.userService.getByEmailWithPassword(email);
+    if (!user) {
+      throw new NotFoundError(`User not found with email: ${email}`);
+    }
+    const token = generateRandomBytes();
+    await this.resetPassService.create({ user_id: user.id, token });
+    res.code(200).send({
+      data: { message: 'Email has been sent' }
+    });
+    await this.emailService.sendResetPassword(user.email, token);
+  }
+
+  async updatePassword(
+    req: FastifyRequest,
+    res: FastifyReply<ServerResponse>
+  ): Promise<void> {
+    const { token, password }: { token: string; password: string } = req.body;
+    await this.resetPassService.completeResetPassword(token, password);
+    res.code(200).send({
+      data: { message: 'Password has been updated' }
+    });
+  }
+
+  requiresLogIn(
+    req: FastifyRequest,
+    res: FastifyReply<ServerResponse>,
+    next: (err?: Error | undefined) => void
+  ): void {
+    if ((req as any).user_id) {
+      next();
+    } else {
+      next(new UnauthorizedError('You need to login'));
+    }
+  }
+
+  async requiresAdmin(
+    req: FastifyRequest,
+    res: FastifyReply<ServerResponse>,
+    next: (err?: Error | undefined) => void
+  ): Promise<void> {
+    if ((req as any).user_id) {
+      const { admin } = await this.userService.getOneById((req as any).user_id);
+      if (admin === true) {
+        next();
+      } else {
+        next(new UnauthorizedError('You are not authorized'));
+      }
+    } else {
+      next(new UnauthorizedError('You need to login'));
+    }
+  }
+}

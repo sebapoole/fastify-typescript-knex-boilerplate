@@ -47,7 +47,7 @@
     "fastify-swagger": "^2.5.1",
     "graphql": "^15.0.0",
     "jsonwebtoken": "^8.5.1",
-    "knex": "^0.20.15",
+    "knex": "^2.4.0",
     "lodash.merge": "^4.6.2",
     "mailgun-js": "^0.22.0",
     "pg": "^8.0.2"
